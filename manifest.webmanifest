@@ -1,0 +1,17 @@
+{
+  "name": "D-Riv 3D Metallerie",
+  "short_name": "D-Riv 3D Métal",
+  "description": "Chiffrage des plans de charpente métallique Advance Steel",
+  "lang": "fr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#05091A",
+  "theme_color": "#03050D",
+  "icons": [
+    {"src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+    {"src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+    {"src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+  ]
+}
