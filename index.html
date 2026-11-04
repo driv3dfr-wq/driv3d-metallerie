@@ -280,10 +280,66 @@ function vProjets(){
     </button>`; }).join("");
   main.innerHTML = `
     <button class="dashed big" type="button" id="newP">+ Nouveau chiffrage</button>
+    <label class="dashed" style="text-align:center;cursor:pointer">Importer une fiche dessin Endgo<input type="file" id="impE" accept=".json,application/json" hidden></label>
+    <p class="muted small" id="impMsg" style="margin:-6px 0 0" hidden></p>
     ${DB.projets.length ? `<div class="plist">${list}</div>` : `<div class="card empty">Aucun projet pour l'instant. Commence par « Nouveau chiffrage », ou charge l'exemple.<div class="row" style="justify-content:center;margin-top:12px"><button class="btn" type="button" id="demo">Charger un exemple</button></div></div>`}`;
   main.querySelector("#newP").onclick = newProjet;
+  main.querySelector("#impE").onchange = e => { const f = e.target.files[0]; if(!f) return; const r = new FileReader();
+    r.onload = () => { const m = main.querySelector("#impMsg"); try{ importEndgo(JSON.parse(r.result)); }catch(err){ m.hidden = false; m.textContent = "Ce fichier n'est pas une fiche dessin Endgo."; } };
+    r.readAsText(f); };
   const d = main.querySelector("#demo"); if(d) d.onclick = loadDemo;
   main.querySelectorAll("[data-open]").forEach(b => b.onclick = () => { DB.cur = b.dataset.open; go("projet"); });
+}
+/* ================= Import depuis Endgo ================= */
+function ouvFromEndgo(x){
+  const q = x.q || {}, n = num(q.nbPortiques), tr = Math.max(0, n-1), kg = x.kg ? String(x.kg) : "";
+  const nom = x.name + (x.variant ? " (option " + x.variant + ")" : "");
+  const mk = (type, qq) => ({id:uid(), type, q:qq, kg, nom, src:x.typeLabel});
+  const hv = (x.hauvents||[]).length, ouvT = new Set((x.ouvertures||[]).map(o => o.type)).size;
+  switch(x.type){
+    case "complet": case "ossature": case "oss_bard": case "oss_couv": {
+      const lissesPignon = num(q.nbLignesLisses) * 2 * Math.max(1, Math.ceil(num(q.l)/num(x.entPort,6)));
+      const pieces = num(q.nbLignesPannes)*tr + num(q.nbLignesLisses)*2*tr + (x.type==="ossature"||x.type==="oss_couv" ? 0 : lissesPignon) + 2*num(x.potelets) + (tr>0 ? 16 : 0) + hv*6;
+      return mk("bat", {portiques:n, pieces:Math.round(pieces), assemb: 5 + (num(x.potelets)?1:0) + hv + ouvT});
+    }
+    case "auvent": return mk("auv", {poteaux:num(q.nbPoteaux), pieces:Math.round(n + num(q.nbLignesPannes)*tr), assemb:3});
+    case "mezz": return mk("mezz", {pieces:Math.round(num(q.emprise)/3) + 4, assemb:3});
+    case "gc": return mk("gc", {ml:num(q.gcL)});
+    case "escalier": return mk("esc", {});
+    case "portail": return mk("port", {portails:num(q.nbPortails), portillons:num(q.nbPortillons), cloture:num(q.clotL)});
+    case "metal": { const t = x.tubes||[]; return mk("serr", {pieces: t.reduce((a,v) => a + (num(v.pieces)||1), 0), assemb: Math.ceil(t.length/2)}); }
+    case "couv": case "bard": case "froid": case "soustraite": return null; // pas de plans d'acier à dessiner
+    default: return mk("serr", {});
+  }
+}
+function importEndgo(f){
+  if(!f || f.format !== "endgo-dessin" || !Array.isArray(f.ouvrages)) throw new Error("format");
+  const ouvrages = f.ouvrages.map(ouvFromEndgo).filter(Boolean);
+  const ignores = f.ouvrages.filter(x => !ouvFromEndgo(x)).map(x => x.name + " (" + x.typeLabel + ")");
+  const endgo = {id:f.id, num:f.num, envoye:f.envoye, titre:f.titre, client:f.client, kg:f.kg,
+    ouvrages:f.ouvrages.map(x => ({name:x.name, typeLabel:x.typeLabel, variant:x.variant, dim:x.dim, kg:x.kg, profils:(x.profils||[]).filter(p => p.ref), schema:x.schema||""})), ignores};
+  let p = DB.projets.find(x => x.endgo && x.endgo.id === f.id);
+  if(p){ p.ouvrages = ouvrages.length ? ouvrages : p.ouvrages; p.endgo = endgo; }
+  else {
+    p = {id:uid(), nom:(f.titre ? f.titre + " · " : "") + f.num, client:"romain", clientNom:"Romain" + (f.client && f.client.nom ? " · " + f.client.nom : ""), date:today(), statut:0, cx:3,
+         phases:{ens:true,fab:true,nom:true,mont:true}, ouvrages: ouvrages.length ? ouvrages : [{id:uid(), type:"serr", q:{}, kg:""}],
+         docs:{}, notes:"", chrono:{}, run:null, revisions:[], endgo};
+    DB.projets.unshift(p);
+  }
+  p.docs.v3d = endgo.ouvrages.some(o => o.schema); p.docs.poids = num(f.kg) > 0; p.docs.ndc = endgo.ouvrages.some(o => o.profils.length);
+  DB.cur = p.id; go("projet");
+}
+function endgoHTML(p){
+  const e = p.endgo; if(!e) return "";
+  return `<div class="card"><h2>Devis Endgo ${esc(e.num)}</h2>
+    <p class="muted small" style="margin:0 0 8px">Reçu le ${esc((e.envoye||"").slice(0,10))}${e.client&&e.client.nom?" · client final : "+esc(e.client.nom)+(e.client.ville?", "+esc(e.client.ville):""):""} · ${fN(num(e.kg)/1000,2)} t d'acier</p>
+    ${e.ouvrages.map(o => `<div style="padding:8px 0;border-top:1px solid var(--line)"><b>${esc(o.name)}</b> <span class="muted small">${esc(o.typeLabel)}${o.variant?" · option "+esc(o.variant):""}</span>
+      <div class="small">${esc(o.dim||"")}${o.kg?" · "+fN(o.kg,0)+" kg":""}</div>
+      ${o.profils.length?`<div class="small muted">${o.profils.map(x=>esc(x.label)+" : "+esc(x.ref)+(x.kg?" ("+fN(x.kg,0)+" kg)":"")).join(" · ")}</div>`:""}
+      ${o.schema?`<img alt="Schéma ${esc(o.name)}" style="width:100%;max-width:520px;margin-top:6px;background:#fff;border-radius:8px" src="data:image/svg+xml;charset=utf-8,${encodeURIComponent(o.schema)}">`:""}</div>`).join("")}
+    ${e.ignores && e.ignores.length?`<p class="hint" style="margin:8px 0 0">Non chiffrés (pas de plans d'acier) : ${e.ignores.map(esc).join(", ")}.</p>`:""}
+    <p class="muted small" style="margin:8px 0 0">Les quantités ci-dessous viennent du devis. Tu peux les corriger.</p>
+  </div>`;
 }
 function loadDemo(){
   DB.projets.unshift({id:uid(), nom:"Exemple : hangar 20 × 30 m", client:"romain", clientNom:"Romain", date:today(), statut:1, cx:3,
@@ -306,6 +362,7 @@ function vProjet(){
     <label class="f"><span>Statut</span><select id="p_statut">${STATUTS.map((s,i)=>`<option value="${i}"${p.statut===i?" selected":""}>${s}</option>`).join("")}</select></label>
   </div></div>
 
+  ${endgoHTML(p)}
   <div class="card"><h2>Ce que j'ai reçu</h2>
     <div class="chips" id="docs">${DOCS.map(([k,l])=>`<button type="button" class="chip${p.docs[k]?" on":""}" data-doc="${k}">${l}</button>`).join("")}</div>
     ${manque.length ? `<div class="hint" style="margin-top:10px">À demander : ${manque.map(esc).join(", ")}. <button class="btn sm ghost" type="button" id="copyManque">Copier la demande</button></div>` : `<p class="okc small" style="margin:10px 0 0">Dossier complet.</p>`}
@@ -373,6 +430,7 @@ function ouvHTML(o, c){
   return `<div class="ouv" data-ouv="${o.id}">
     <div class="ouv-head">
       <select class="o-type" aria-label="Type d'ouvrage">${Object.entries(TYPES).map(([k,v])=>`<option value="${k}"${o.type===k?" selected":""}>${v.label}</option>`).join("")}</select>
+      ${o.nom?`<span class="small muted" style="flex-basis:100%;order:3">${esc(o.nom)}${o.src?" · "+esc(o.src)+" dans Endgo":""}</span>`:""}
       <span class="sub">${fH(l.h)}</span>
       ${cur().ouvrages.length>1?`<button class="btn sm ghost danger o-del" type="button" aria-label="Retirer">✕</button>`:""}
     </div>
