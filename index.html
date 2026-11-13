@@ -211,6 +211,7 @@ function save(){
     let ok = true; try{ localStorage.setItem(KEY, JSON.stringify(DB)); }catch(e){ ok = false; }
     const d = new Date();
     document.getElementById("saveState").textContent = ok ? "Enregistré "+String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0") : "Non enregistré";
+    if(typeof lienPrixPlanifier === "function") lienPrixPlanifier();
   }, 250);
 }
 const S = k => (DB.settings[k]===undefined || DB.settings[k]===null || DB.settings[k]==="") ? SET_DEF[k] : DB.settings[k];
@@ -313,13 +314,13 @@ function ouvFromEndgo(x){
     default: return mk("serr", {});
   }
 }
-function importEndgo(f){
+function importEndgo(f, auto){
   if(!f || f.format !== "endgo-dessin" || !Array.isArray(f.ouvrages)) throw new Error("format");
   const ouvrages = f.ouvrages.map(ouvFromEndgo).filter(Boolean);
   const ignores = f.ouvrages.filter(x => !ouvFromEndgo(x)).map(x => x.name + " (" + x.typeLabel + ")");
   const endgo = {id:f.id, num:f.num, envoye:f.envoye, titre:f.titre, client:f.client, kg:f.kg,
     ouvrages:f.ouvrages.map(x => ({name:x.name, typeLabel:x.typeLabel, variant:x.variant, dim:x.dim, kg:x.kg, profils:(x.profils||[]).filter(p => p.ref), schema:x.schema||""})), ignores};
-  let p = DB.projets.find(x => x.endgo && x.endgo.id === f.id);
+  let p = DB.projets.find(x => x.endgo && x.endgo.id === f.id); const neuf = !p;
   if(p){ p.ouvrages = ouvrages.length ? ouvrages : p.ouvrages; p.endgo = endgo; }
   else {
     p = {id:uid(), nom:(f.titre ? f.titre + " · " : "") + f.num, client:"romain", clientNom:"Romain" + (f.client && f.client.nom ? " · " + f.client.nom : ""), date:today(), statut:0, cx:3,
@@ -328,6 +329,7 @@ function importEndgo(f){
     DB.projets.unshift(p);
   }
   p.docs.v3d = endgo.ouvrages.some(o => o.schema); p.docs.poids = num(f.kg) > 0; p.docs.ndc = endgo.ouvrages.some(o => o.profils.length);
+  if(auto){ if(neuf && !p.mode) p.mode = "heures"; return neuf; }
   DB.cur = p.id; go("projet");
 }
 function endgoHTML(p){
@@ -528,6 +530,80 @@ function vBilan(){
   <div class="card"><h2>Repères du marché</h2><p class="muted small" style="margin:0">Dessin Advance Steel en France : 45 à 60 € HT/h pour un profil expérimenté. Charpente de bâtiment : environ 1,5 à 3 h par tonne. Étude du 04/11/2026.</p></div>`;
 }
 
+/* ================= Liaison automatique avec Devis ENDGO =================
+   Même script Google qu'ENDGO (adresse /exec + clé). ENDGO y dépose les chantiers envoyés
+   (bouton « Envoyer à D-Riv 3D ») ; D-Riv les relève tout seul et renvoie son prix à chaque changement. */
+const LIEN_KEY = "driv3d_liaison";
+let LIEN = {url:"", key:"", depuis:"", envoyes:{}, at:"", err:""};
+try{ LIEN = Object.assign(LIEN, JSON.parse(localStorage.getItem(LIEN_KEY) || "{}")); }catch(e){}
+function lienStore(){ try{ localStorage.setItem(LIEN_KEY, JSON.stringify(LIEN)); }catch(e){} }
+const lienOn = () => !!(LIEN.url && LIEN.key);
+function lienCall(payload){
+  payload.key = LIEN.key;
+  return fetch(LIEN.url, {method:"POST", body:JSON.stringify(payload)}).then(r => r.json());
+}
+function lienMsg(t){ const s = document.getElementById("saveState"); if(s) s.textContent = t; }
+let lienBusy = false, lienTimer = null;
+async function lienRelever(manuel){
+  if(!lienOn() || lienBusy) return;
+  if(!navigator.onLine){ if(manuel) lienMsg("Hors ligne"); return; }
+  lienBusy = true;
+  try{
+    const r = await lienCall({action:"drivLire", fiches:true, depuis:LIEN.depuis || ""});
+    if(!r || !r.ok) throw new Error(r && r.err === "action inconnue" ? "script Google pas à jour" : (r && r.err) || "réponse inattendue");
+    const fiches = (r.fiches || []).sort((a, b) => String(a.envoye).localeCompare(String(b.envoye)));
+    let nouveaux = 0, maj = 0;
+    fiches.forEach(f => { try{ const neuf = importEndgo(f, true); if(neuf) nouveaux++; else maj++; }catch(e){}
+      if(String(f.envoye) > String(LIEN.depuis || "")) LIEN.depuis = f.envoye; });
+    LIEN.at = new Date().toISOString(); LIEN.err = ""; lienStore();
+    if(fiches.length){ save(); render(); lienMsg(nouveaux ? nouveaux + " chantier" + (nouveaux > 1 ? "s" : "") + " ENDGO reçu" + (nouveaux > 1 ? "s" : "") : "Chantier ENDGO mis à jour"); }
+    else if(manuel) lienMsg("ENDGO : rien de nouveau");
+    lienPrixPlanifier(0);
+  }catch(e){ LIEN.err = e.message; lienStore(); if(manuel) lienMsg("Liaison ENDGO : " + e.message); }
+  finally{ lienBusy = false; }
+}
+/* Prix renvoyé à ENDGO dès qu'il change (prix affiché du projet : à l'heure ou à la tonne + révisions). */
+function lienPrixListe(){
+  const out = {};
+  DB.projets.forEach(p => { if(!p.endgo || !p.endgo.id) return; const c = calc(p);
+    const v = {ht:Math.round(c.total * 100) / 100, mode:c.mode === "tonne" && c.kg > 0 ? "tonne" : "heures", h:Math.round(c.hEst * 10) / 10, kg:Math.round(c.kg), statut:STATUTS[p.statut] || ""};
+    const sig = JSON.stringify(v);
+    if(LIEN.envoyes[p.endgo.id] !== sig) out[p.endgo.id] = Object.assign(v, {maj:new Date().toISOString(), sig}); });
+  return out;
+}
+function lienPrixPlanifier(ms){
+  if(!lienOn()) return;
+  clearTimeout(lienTimer); lienTimer = setTimeout(lienPrixEnvoyer, ms == null ? 3000 : ms);
+}
+async function lienPrixEnvoyer(){
+  if(!lienOn() || !navigator.onLine) return;
+  const l = lienPrixListe(), ids = Object.keys(l); if(!ids.length) return;
+  const prix = {}; ids.forEach(k => { const {sig, ...v} = l[k]; prix[k] = v; });
+  try{
+    const r = await lienCall({action:"drivPrix", prix});
+    if(!r || !r.ok) throw new Error((r && r.err) || "réponse inattendue");
+    ids.forEach(k => LIEN.envoyes[k] = l[k].sig); LIEN.err = ""; lienStore();
+    lienMsg("Prix envoyé à ENDGO");
+  }catch(e){ LIEN.err = e.message; lienStore(); }
+}
+function lienCard(){
+  return `<div class="card" id="lienCard"><h2>Liaison avec Devis ENDGO</h2>
+    <p class="muted small" style="margin:0 0 10px">Recopie l'adresse du script et la clé affichées dans ENDGO (menu ☰ › Synchronisation Google). Les chantiers envoyés depuis ENDGO arrivent tout seuls dans Projets, et ton prix des plans repart vers le devis ENDGO à chaque changement.</p>
+    <div class="grid"><label class="f"><span>Adresse du script (se termine par /exec)</span><input id="l_url" value="${esc(LIEN.url)}" placeholder="https://script.google.com/macros/s/…/exec"></label>
+    <label class="f"><span>Clé</span><input id="l_key" value="${esc(LIEN.key)}"></label></div>
+    <div class="row" style="margin-top:10px"><button class="btn" type="button" id="l_go">Relever maintenant</button></div>
+    <p class="muted small" id="l_st" style="margin:8px 0 0">${!lienOn() ? "Pas encore reliée." : LIEN.err ? "Dernier essai en échec : " + esc(LIEN.err) : LIEN.at ? "Dernier relevé : " + new Date(LIEN.at).toLocaleString("fr-FR") : "Reliée, pas encore relevée."}</p></div>`;
+}
+function lienBind(){
+  const u = main.querySelector("#l_url"), k = main.querySelector("#l_key"); if(!u) return;
+  const lire = () => { const nu = u.value.trim(), nk = k.value.trim(); if(nu !== LIEN.url || nk !== LIEN.key){ LIEN.url = nu; LIEN.key = nk; LIEN.depuis = ""; LIEN.envoyes = {}; LIEN.err = ""; lienStore(); } };
+  u.onchange = lire; k.onchange = lire;
+  main.querySelector("#l_go").onclick = async () => { lire(); const st = main.querySelector("#l_st");
+    if(!lienOn()){ st.textContent = "Indique l'adresse et la clé."; return; }
+    st.textContent = "Relevé en cours…"; await lienRelever(true);
+    if(DB.tab === "reglages"){ const s2 = main.querySelector("#l_st"); if(s2) s2.textContent = LIEN.err ? "Échec : " + LIEN.err : "OK, relevé le " + new Date(LIEN.at).toLocaleString("fr-FR"); } };
+}
+
 /* ================= Réglages ================= */
 function vReglages(){
   const st = DB.settings, types = st.types = st.types || {}, pct = S("phasePct"), cx = S("cx");
@@ -546,8 +622,9 @@ function vReglages(){
     ${t.f.map(([fk,l,u,h])=>`<label class="f"><span>${esc(l)} (h/${u})</span><input data-t="${k}" data-h="${fk}" inputmode="decimal" value="${h}"></label>`).join("")}
     <label class="f"><span>Prix à la tonne (€/t)</span><input data-t="${k}" data-k="eurT" inputmode="decimal" value="${t.eurT}"></label>
   </div></div>`; }).join("")}
+  ${lienCard()}
   <div class="card"><h2>Sauvegarde</h2>
-    <p class="muted small" style="margin:0 0 10px">Tes projets restent sur cet appareil. La synchro Google Drive avec Endgo viendra dans une prochaine version. En attendant, garde une copie de temps en temps.</p>
+    <p class="muted small" style="margin:0 0 10px">Tes projets restent sur cet appareil. Garde une copie de temps en temps.</p>
     <div class="row"><button class="btn" type="button" id="exp">Copier la sauvegarde</button><label class="btn" style="cursor:pointer">Importer un fichier<input type="file" id="imp" accept=".json,application/json" hidden></label><button class="btn" type="button" id="paste">Coller une sauvegarde</button></div>
     <textarea id="bk" rows="4" hidden aria-label="Sauvegarde"></textarea>
   </div>`;
@@ -556,6 +633,7 @@ function vReglages(){
   on("[data-pct]", i => { st.phasePct = Object.assign({}, S("phasePct"), {[i.dataset.pct]: num(i.value)}); });
   on("[data-cxv]", i => { const a = S("cx").slice(); a[+i.dataset.cxv] = num(i.value, 1); st.cx = a; });
   on("[data-t]", i => { const o = types[i.dataset.t] = types[i.dataset.t] || {}; if(i.dataset.h){ o.h = o.h || {}; o.h[i.dataset.h] = num(i.value); } else o[i.dataset.k] = num(i.value); });
+  lienBind();
   const bk = main.querySelector("#bk");
   main.querySelector("#exp").onclick = function(){ bk.hidden = false; bk.value = JSON.stringify({app:"driv3d-metallerie", ...DB}); copy(bk.value, this); };
   main.querySelector("#paste").onclick = function(){ if(bk.hidden){ bk.hidden = false; bk.value = ""; bk.placeholder = "Colle ici le texte de la sauvegarde, puis touche encore le bouton"; bk.focus(); return; } restore(bk.value, this); };
@@ -576,6 +654,10 @@ function applyTheme(){ let t = "dark"; try{ t = localStorage.getItem(THEME_KEY) 
 document.getElementById("themeBtn").onclick = () => { const l = document.documentElement.dataset.theme === "light"; try{ localStorage.setItem(THEME_KEY, l ? "dark" : "light"); }catch(e){} applyTheme(); };
 applyTheme();
 render();
+if(lienOn()) setTimeout(() => lienRelever(false), 1500);
+setInterval(() => { if(!document.hidden) lienRelever(false); }, 120000);
+document.addEventListener("visibilitychange", () => { if(!document.hidden) lienRelever(false); });
+window.addEventListener("online", () => lienRelever(false));
 if("serviceWorker" in navigator && location.protocol === "https:" && !/claude/.test(location.hostname)) navigator.serviceWorker.register("sw.js").catch(()=>{});
 </script>
 </body>
