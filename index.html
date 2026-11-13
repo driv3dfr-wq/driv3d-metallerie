@@ -83,6 +83,20 @@ nav.tabs button.on{color:#fff;border-bottom-color:#FF8C21}
 .menu button:hover{background:var(--card2)}
 
 main{max-width:1000px;margin:0 auto;padding:16px;display:flex;flex-direction:column;gap:16px}
+.srow{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}
+.srow:last-child{border-bottom:none}
+.srow .lab{flex:1;min-width:0}
+.srow .lab small{display:block;color:var(--soft);font-size:.8rem;margin-top:2px}
+.srow input{width:84px;flex:none;text-align:right;font-variant-numeric:tabular-nums}
+.srow .u{width:58px;flex:none;color:var(--soft);font-size:.82rem}
+details.sdet{border-top:1px solid var(--line)}
+details.sdet:first-of-type{border-top:none}
+details.sdet>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:10px;padding:12px 0;font-weight:700}
+details.sdet>summary::-webkit-details-marker{display:none}
+details.sdet>summary::after{content:"›";margin-left:auto;color:var(--soft);font-size:1.3rem;transition:transform .15s}
+details.sdet[open]>summary::after{transform:rotate(90deg)}
+details.sdet>summary small{font-weight:400;color:var(--soft)}
+.sdet .in{padding:0 0 10px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px}
 .card h2{margin:0 0 10px;font-size:1.02rem}
 .card h3{margin:0;font-size:.95rem}
@@ -149,6 +163,7 @@ a.btn{text-decoration:none;color:var(--ink);display:inline-block}
     <span class="v2">MÉTAL</span><span class="sub">Chiffrage des plans Advance Steel</span>
     <span class="savestate" id="saveState"></span>
     <button class="iconbtn" id="themeBtn" type="button" aria-label="Changer de thème">◐</button>
+    <button class="iconbtn" id="menuBtn" type="button" aria-label="Menu : connexions et sauvegarde">☰</button>
   </div>
   <nav class="tabs" id="tabs">
     <button type="button" data-tab="projets">Projets</button>
@@ -166,6 +181,7 @@ a.btn{text-decoration:none;color:var(--ink);display:inline-block}
 /* ================= Données de base ================= */
 const KEY = "driv3d_metal_v1", THEME_KEY = "driv3d_metal_theme";
 const STATUTS = ["Reçu","Chiffré","En cours","Plans envoyés","Validé"];
+const PARTS = [["mod","Modélisation 3D + plans d'ensemble"],["plans","Plans de fabrication, nomenclatures et montage"]];
 const PHASES = [
   ["ens","Plans d'ensemble + modèle 3D"],
   ["fab","Plans de fabrication"],
@@ -173,32 +189,33 @@ const PHASES = [
   ["mont","Plans de montage"]
 ];
 const DOCS = [["pdf","Plans archi PDF"],["dwg","DWG"],["ndc","Note de calcul"],["photos","Photos / croquis"],["v3d","Schéma 3D Endgo"],["poids","Poids d'acier"]];
-// Temps de départ = estimations (étude de prix du 04/11/2026), à recaler avec les chronos.
-// [clé, libellé, unité, heures par unité]
+// Heures de MODÉLISATION 3D + plans d'ensemble (calcul revu le 13/11/2026 avec Donatien).
+// Les plans de fabrication + nomenclatures + montage = modélisation × coefPlans.
+// [clé, libellé, unité, heures par unité] ; prem = heures du 1er élément du 1er champ (1er portique dessiné, les suivants copiés).
 const TYPES = {
-  bat:{label:"Bâtiment à portiques", base:4, eurT:100, f:[["portiques","Portiques","u",2],["pieces","Pièces secondaires (pannes, lisses, contreventement…)","u",0.1],["assemb","Assemblages types différents","u",1.5]],
+  bat:{label:"Bâtiment à portiques", base:1.5, prem:3, eurT:100, f:[["portiques","Portiques (le 1er est dessiné, les autres copiés)","u",0.1],["pieces","Pièces secondaires (pannes, lisses, contreventement…)","u",0.01],["assemb","Assemblages types différents","u",0.3]],
        aide:"Un portique = 2 poteaux, 2 arbalétriers, 2 jarrets, 1 faîtage, 2 platines de pied."},
-  mezz:{label:"Mezzanine / plancher", base:3, eurT:200, f:[["pieces","Pièces (poteaux, poutres, solives)","u",0.15],["tremies","Trémies","u",1.5],["assemb","Assemblages types différents","u",1]],
+  mezz:{label:"Mezzanine / plancher", base:1.5, eurT:200, f:[["pieces","Pièces (poteaux, poutres, solives)","u",0.075],["tremies","Trémies","u",0.75],["assemb","Assemblages types différents","u",0.5]],
        aide:"Compter poteaux + poutres porteuses + solives. L'escalier se chiffre à part."},
-  esc:{label:"Escalier", base:4, eurT:700, f:[["marches","Marches","u",0.3],["paliers","Paliers","u",2],["gc","Garde-corps d'escalier","ml",0.3]],
+  esc:{label:"Escalier", base:2, eurT:700, f:[["marches","Marches","u",0.15],["paliers","Paliers","u",1],["gc","Garde-corps d'escalier","ml",0.15]],
        aide:"Escalier droit 1 volée ≈ 15 marches. Quart ou demi-tournant : compter le palier."},
-  gc:{label:"Garde-corps", base:2, eurT:900, f:[["ml","Longueur droite","ml",0.25],["rampant","Longueur en rampant","ml",0.4],["angles","Angles / retours","u",0.5]],
+  gc:{label:"Garde-corps", base:1, eurT:900, f:[["ml","Longueur droite","ml",0.125],["rampant","Longueur en rampant","ml",0.2],["angles","Angles / retours","u",0.25]],
       aide:"Compter chaque changement de direction comme un angle."},
-  port:{label:"Portail / clôture", base:3, eurT:600, f:[["portails","Portails","u",3],["portillons","Portillons","u",2],["cloture","Clôture","ml",0.05]],
+  port:{label:"Portail / clôture", base:1.5, eurT:600, f:[["portails","Portails","u",1.5],["portillons","Portillons","u",1],["cloture","Clôture","ml",0.025]],
         aide:"Un portail coulissant compte comme un portail."},
-  auv:{label:"Auvent / carport", base:3, eurT:400, f:[["poteaux","Poteaux","u",1],["pieces","Autres pièces (poutres, pannes)","u",0.15],["assemb","Assemblages types différents","u",1]],
+  auv:{label:"Auvent / carport", base:1.5, eurT:400, f:[["poteaux","Poteaux","u",0.5],["pieces","Autres pièces (poutres, pannes)","u",0.075],["assemb","Assemblages types différents","u",0.5]],
        aide:"Auvent simple à 2 poteaux ≈ 10 pièces."},
-  pass:{label:"Passerelle", base:6, eurT:300, f:[["longueur","Longueur","m",1.2],["assemb","Assemblages types différents","u",1]],
+  pass:{label:"Passerelle", base:3, eurT:300, f:[["longueur","Longueur","m",0.6],["assemb","Assemblages types différents","u",0.5]],
         aide:"Le garde-corps de la passerelle se chiffre en plus (ouvrage Garde-corps)."},
-  serr:{label:"Serrurerie / autre", base:2, eurT:800, f:[["pieces","Pièces","u",0.2],["assemb","Assemblages types différents","u",1]],
+  serr:{label:"Serrurerie / autre", base:1, eurT:800, f:[["pieces","Pièces","u",0.1],["assemb","Assemblages types différents","u",0.5]],
         aide:"Pour tout ce qui n'entre pas ailleurs."}
 };
 const CX_LABELS = ["Très simple","Simple","Normal","Compliqué","Très compliqué"];
 const SET_DEF = {
   taux:40,                  // €/h pour les clients pros
-  phasePct:{ens:40,fab:35,nom:10,mont:15},
+  coefPlans:1,              // plans de fab + nomenclatures + montage = modélisation × coefPlans
   cx:[0.8,0.9,1,1.25,1.6],  // coefficients de complexité 1 à 5
-  types:{}                  // surcharges de TYPES : {bat:{base, eurT, h:{portiques:2,...}}}
+  typesM:{}                 // surcharges de TYPES : {bat:{base, prem, eurT, h:{portiques:0.1,...}}}
 };
 
 /* ================= Stockage ================= */
@@ -217,8 +234,8 @@ function save(){
 }
 const S = k => (DB.settings[k]===undefined || DB.settings[k]===null || DB.settings[k]==="") ? SET_DEF[k] : DB.settings[k];
 function T(type){ // type d'ouvrage avec les réglages de l'utilisateur
-  const b = TYPES[type], o = (S("types")||{})[type] || {};
-  return { label:b.label, aide:b.aide, base: num(o.base, b.base), eurT: num(o.eurT, b.eurT),
+  const b = TYPES[type], o = (S("typesM")||{})[type] || {};
+  return { label:b.label, aide:b.aide, base: num(o.base, b.base), eurT: num(o.eurT, b.eurT), prem: b.prem === undefined ? null : num(o.prem, b.prem),
            f: b.f.map(([k,l,u,h]) => [k,l,u, num(o.h && o.h[k], h)]) };
 }
 function num(v, def){ if(v===undefined || v===null || v==="") return def===undefined?0:def; const n = parseFloat(String(v).replace(",", ".")); return isNaN(n) ? (def===undefined?0:def) : n; }
@@ -232,17 +249,18 @@ const cur = () => DB.projets.find(p => p.id === DB.cur);
 
 /* ================= Calcul ================= */
 function calc(p){
-  const cx = S("cx")[(p.cx||3)-1] || 1, pct = S("phasePct");
+  const cx = S("cx")[(p.cx||3)-1] || 1, coef = num(S("coefPlans"), 1);
   let hBrut = 0, kg = 0, prixT = 0;
   const lignes = p.ouvrages.map(o => {
     const t = T(o.type);
-    let h = t.base; t.f.forEach(([k,,,hu]) => h += num(o.q[k]) * hu);
+    let h = t.base; t.f.forEach(([k,,,hu], i) => { const n = num(o.q[k]); h += (i === 0 && t.prem !== null && n > 0) ? t.prem + (n - 1) * hu : n * hu; });
     const okg = num(o.kg);
     kg += okg; prixT += okg/1000 * t.eurT; hBrut += h;
     return {o, t, h, kg:okg, prixT: okg/1000*t.eurT};
   });
-  const pTot = PHASES.reduce((s,[k]) => s + num(pct[k]), 0) || 100;
-  const phases = PHASES.map(([k,l]) => ({k, l, on: p.phases[k] !== false, h: hBrut * cx * num(pct[k]) / pTot}));
+  const ph = p.phases || {}, hMod = hBrut * cx;
+  const phases = [{k:"mod", l:PARTS[0][1], on: ph.mod !== undefined ? ph.mod !== false : ph.ens !== false, h: hMod},
+                  {k:"plans", l:PARTS[1][1], on: ph.plans !== undefined ? ph.plans !== false : (ph.fab !== false || ph.nom !== false || ph.mont !== false), h: hMod * coef}];
   const hEst = phases.reduce((s,x) => s + (x.on ? x.h : 0), 0);
   const taux = num(p.taux, S("taux"));
   const prixH = hEst * taux;
@@ -264,7 +282,7 @@ function render(){
   if((DB.tab==="projet" || DB.tab==="chrono") && !cur()) DB.tab = "projets";
   document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === DB.tab));
   bar.hidden = true;
-  ({projets:vProjets, projet:vProjet, chrono:vChrono, bilan:vBilan, reglages:vReglages})[DB.tab]();
+  ({projets:vProjets, projet:vProjet, chrono:vChrono, bilan:vBilan, reglages:vReglages, menu:vMenu})[DB.tab]();
 }
 
 /* ================= Projets ================= */
@@ -380,8 +398,8 @@ function vProjet(){
     <p class="muted small" style="margin:8px 0 0">${CX_LABELS[(p.cx||3)-1]} : × ${fN(c.cx,2)} sur les heures (biais, courbes, pentes, interfaces béton/bois…).</p>
   </div>
 
-  <div class="card"><h2>Phases à fournir</h2>
-    ${c.phases.map(x=>`<div class="phase"><label class="row" style="gap:10px"><input type="checkbox" data-ph="${x.k}" style="width:20px;height:20px"${x.on?" checked":""}> ${x.l}</label><span></span><span class="t">${x.on?fH(x.h):"—"}</span></div>`).join("")}
+  <div class="card"><h2>À fournir</h2>
+    ${c.phases.map(x=>`<div class="phase"><label style="display:flex;align-items:center;gap:10px;flex:1"><input type="checkbox" data-ph="${x.k}" style="width:20px;height:20px;flex:none"${x.on?" checked":""}> <span>${x.l}</span></label></div>`).join("")}
   </div>
 
   <div class="card"><h2>Résultat</h2>
@@ -413,7 +431,7 @@ function vProjet(){
   const cm = main.querySelector("#copyManque");
   if(cm) cm.onclick = () => copy(`Bonjour, pour chiffrer les plans de « ${p.nom||"ce projet"} », il me manque : ${manque.join(", ")}. Merci !`, cm);
   main.querySelectorAll("[data-cx]").forEach(b => b.onclick = () => { p.cx = +b.dataset.cx; save(); vProjet(); });
-  main.querySelectorAll("[data-ph]").forEach(b => b.onchange = () => { p.phases[b.dataset.ph] = b.checked; save(); vProjet(); });
+  main.querySelectorAll("[data-ph]").forEach(b => b.onchange = () => { p.phases = p.phases || {}; p.phases[b.dataset.ph] = b.checked; save(); vProjet(); });
   main.querySelectorAll("[data-mode]").forEach(b => b.onclick = () => { p.mode = b.dataset.mode; save(); vProjet(); });
   main.querySelector("#addO").onclick = () => { p.ouvrages.push({id:uid(), type:"gc", q:{}, kg:""}); save(); vProjet(); };
   main.querySelector("#delP").onclick = function(){
@@ -435,7 +453,6 @@ function ouvHTML(o, c){
     <div class="ouv-head">
       <select class="o-type" aria-label="Type d'ouvrage">${Object.entries(TYPES).map(([k,v])=>`<option value="${k}"${o.type===k?" selected":""}>${v.label}</option>`).join("")}</select>
       ${o.nom?`<span class="small muted" style="flex-basis:100%;order:3">${esc(o.nom)}${o.src?" · "+esc(o.src)+" dans Endgo":""}</span>`:""}
-      <span class="sub">${fH(l.h)}</span>
       ${cur().ouvrages.length>1?`<button class="btn sm ghost danger o-del" type="button" aria-label="Retirer">✕</button>`:""}
     </div>
     <div class="ouv-body">
@@ -443,7 +460,7 @@ function ouvHTML(o, c){
         ${t.f.map(([k,lab,u,hu])=>`<label class="f"><span>${esc(lab)} (${u})</span><input inputmode="decimal" data-q="${k}" value="${esc(o.q[k]||"")}" placeholder="0"></label>`).join("")}
         <label class="f"><span>Poids d'acier (kg)</span><input class="o-kg" inputmode="decimal" value="${esc(o.kg||"")}" placeholder="depuis le devis Endgo"></label>
       </div>
-      <div class="hint">${esc(t.aide)} Base ${fH(t.base)} + ${t.f.map(([,lab,u,hu])=>fN(hu,2)+" h/"+u).join(" + ")}. ${l.kg>0?`À la tonne : ${fN(t.eurT,0)} €/t → ${fE(l.prixT)}.`:""}</div>
+      <div class="hint">${esc(t.aide)} ${l.kg>0?`À la tonne : ${fN(t.eurT,0)} €/t → ${fE(l.prixT)}.`:""}</div>
       ${o.type==="bat"?`<div><button class="btn sm o-help" type="button">Compter les pièces d'un bâtiment</button></div>`:""}
     </div>
   </div>`;
@@ -480,8 +497,8 @@ function vChrono(){
     <p class="muted small" style="margin:4px 0 0">${p.run ? "En cours : "+PHASES.find(x=>x[0]===p.run.phase)[1] : "Touche une phase pour lancer le chrono."}</p>
   </div>
   <div class="card"><h2>Phases</h2>
-    ${PHASES.map(([k,l]) => { const est = c.phases.find(x=>x.k===k), s = num((p.chrono||{})[k]) + (p.run&&p.run.phase===k?(Date.now()-p.run.start)/1000:0);
-      return `<div class="phase"><span>${l}<br><span class="muted small">estimé ${est.on?fH(est.h):"—"}</span></span><span class="t">${fT(s)}</span>
+    ${PHASES.map(([k,l]) => { const s = num((p.chrono||{})[k]) + (p.run&&p.run.phase===k?(Date.now()-p.run.start)/1000:0);
+      return `<div class="phase"><span>${l}</span><span class="t">${fT(s)}</span>
       <button type="button" class="btn sm ${p.run&&p.run.phase===k?"run":""}" data-run="${k}">${p.run&&p.run.phase===k?"Stop":"Go"}</button></div>`; }).join("")}
     <div class="row" style="margin-top:10px"><label class="f" style="flex:1"><span>Corriger une phase (heures)</span>
       <div class="row"><select id="fixPh" style="flex:1">${PHASES.map(([k,l])=>`<option value="${k}">${l}</option>`).join("")}</select><input id="fixH" inputmode="decimal" style="width:90px" placeholder="h"><button class="btn sm" type="button" id="fixOk">OK</button></div></label></div>
@@ -602,7 +619,7 @@ function lienBind(){
   main.querySelector("#l_go").onclick = async () => { lire(); const st = main.querySelector("#l_st");
     if(!lienOn()){ st.textContent = "Indique l'adresse et la clé."; return; }
     st.textContent = "Relevé en cours…"; await lienRelever(true);
-    if(DB.tab === "reglages"){ const s2 = main.querySelector("#l_st"); if(s2) s2.textContent = LIEN.err ? "Échec : " + LIEN.err : "OK, relevé le " + new Date(LIEN.at).toLocaleString("fr-FR"); } };
+    if(DB.tab === "menu"){ const s2 = main.querySelector("#l_st"); if(s2) s2.textContent = LIEN.err ? "Échec : " + LIEN.err : "OK, relevé le " + new Date(LIEN.at).toLocaleString("fr-FR"); } };
 }
 
 /* ================= Synchro de MES projets (PC ↔ téléphone) =================
@@ -696,40 +713,58 @@ function msBind(){
 
 /* ================= Réglages ================= */
 function vReglages(){
-  const st = DB.settings, types = st.types = st.types || {}, pct = S("phasePct"), cx = S("cx");
+  const st = DB.settings, types = st.typesM = st.typesM || {}, cx = S("cx");
+  const row = (lab, sub, attrs, val, u) => `<label class="srow"><span class="lab">${lab}${sub ? `<small>${sub}</small>` : ""}</span><input ${attrs} inputmode="decimal" value="${val}"><span class="u">${u}</span></label>`;
+  const exBat = () => { const t = T("bat"), q = {portiques:5, pieces:96, assemb:6};
+    let h = t.base; t.f.forEach(([k,,,hu], i) => { const n = q[k]; h += (i === 0 && t.prem !== null) ? t.prem + (n - 1) * hu : n * hu; });
+    return `Exemple, 5 portiques, 96 pièces, 6 assemblages : <b>${fH(h)}</b> de modélisation, <b>${fH(h * (1 + num(S("coefPlans"), 1)))}</b> au total.`; };
   main.innerHTML = `
-  <div class="card"><h2>Taux</h2><div class="grid">
-    <label class="f"><span>Taux horaire (€/h HT)</span><input id="s_taux" inputmode="decimal" value="${S("taux")}"></label>
-  </div><p class="muted small" style="margin:8px 0 0">Les révisions sont facturées au même taux. Le marché est autour de 45 à 60 €/h.</p></div>
-  <div class="card"><h2>Répartition par phase (%)</h2><div class="grid">
-    ${PHASES.map(([k,l])=>`<label class="f"><span>${l}</span><input data-pct="${k}" inputmode="decimal" value="${num(pct[k])}"></label>`).join("")}
-  </div></div>
-  <div class="card"><h2>Coefficients de complexité</h2><div class="grid">
-    ${cx.map((v,i)=>`<label class="f"><span>${i+1} · ${CX_LABELS[i]}</span><input data-cxv="${i}" inputmode="decimal" value="${v}"></label>`).join("")}
-  </div></div>
-  ${Object.keys(TYPES).map(k => { const t = T(k); return `<div class="card"><h2>${t.label}</h2><div class="grid">
-    <label class="f"><span>Base (h)</span><input data-t="${k}" data-k="base" inputmode="decimal" value="${t.base}"></label>
-    ${t.f.map(([fk,l,u,h])=>`<label class="f"><span>${esc(l)} (h/${u})</span><input data-t="${k}" data-h="${fk}" inputmode="decimal" value="${h}"></label>`).join("")}
-    <label class="f"><span>Prix à la tonne (€/t)</span><input data-t="${k}" data-k="eurT" inputmode="decimal" value="${t.eurT}"></label>
-  </div></div>`; }).join("")}
+  <div class="card"><h2>Ton tarif</h2>
+    ${row("Taux horaire", "Aussi utilisé pour les révisions. Marché : 45 à 60 €/h.", `id="s_taux"`, S("taux"), "€/h HT")}
+    ${row("Plans de fab, nomenclatures et montage", "1 = autant de temps que la modélisation 3D + plans d'ensemble.", `id="s_coef"`, S("coefPlans"), "× modél.")}
+  </div>
+  <div class="card"><h2>Temps de modélisation par ouvrage</h2>
+    <p class="muted small" style="margin:0 0 4px">Heures pour la modélisation 3D + plans d'ensemble, complexité « Normal ». Touche un ouvrage pour régler ses temps.</p>
+    ${Object.keys(TYPES).map(k => { const t = T(k), mod = types[k] && Object.keys(types[k]).length; return `<details class="sdet" data-det="${k}">
+      <summary>${t.label}${mod ? ` <small>· modifié</small>` : ""}</summary><div class="in">
+      ${row("Mise en route du projet", "Temps fixe, quelle que soit la taille.", `data-t="${k}" data-k="base"`, t.base, "h")}
+      ${t.prem !== null ? row("1er portique", "Dessiné en entier.", `data-t="${k}" data-k="prem"`, t.prem, "h") : ""}
+      ${t.f.map(([fk,l,u,h],i) => row(i===0 && t.prem!==null ? "Chaque portique copié" : "Par " + (u === "u" ? "unité" : u) + " : " + esc(l.toLowerCase()), "", `data-t="${k}" data-h="${fk}"`, h, "h/" + u)).join("")}
+      ${row("Prix à la tonne", "Utilisé quand tu choisis « Prix à la tonne ».", `data-t="${k}" data-k="eurT"`, t.eurT, "€/t")}
+      ${k === "bat" ? `<p class="hint" id="exBat" style="margin:8px 0 0">${exBat()}</p>` : ""}
+      ${mod ? `<button class="btn sm ghost" type="button" data-reset="${k}" style="margin-top:8px">Remettre les valeurs d'origine</button>` : ""}
+    </div></details>`; }).join("")}
+  </div>
+  <div class="card"><details class="sdet"><summary>Coefficients de complexité (boutons 1 à 5)</summary><div class="in">
+    ${cx.map((v,i) => row((i+1) + " · " + CX_LABELS[i], "", `data-cxv="${i}"`, v, "× heures")).join("")}
+  </div></details></div>
+  <p class="muted small" style="text-align:center;margin:0">Synchro, liaison ENDGO et sauvegarde : menu ☰ en haut.</p>`;
+  const on = (sel, fn) => main.querySelectorAll(sel).forEach(i => i.onchange = () => { fn(i); save(); const e = main.querySelector("#exBat"); if(e) e.innerHTML = exBat(); });
+  on("#s_taux", i => st.taux = num(i.value, SET_DEF.taux));
+  on("#s_coef", i => st.coefPlans = num(i.value, SET_DEF.coefPlans));
+  on("[data-cxv]", i => { const a = S("cx").slice(); a[+i.dataset.cxv] = num(i.value, 1); st.cx = a; });
+  on("[data-t]", i => { const o = types[i.dataset.t] = types[i.dataset.t] || {}; if(i.dataset.h){ o.h = o.h || {}; o.h[i.dataset.h] = num(i.value); } else o[i.dataset.k] = num(i.value); });
+  main.querySelectorAll("[data-reset]").forEach(b => b.onclick = () => { delete types[b.dataset.reset]; save(); vReglages(); const d = main.querySelector(`[data-det="${b.dataset.reset}"]`); if(d) d.open = true; });
+}
+/* Menu ☰ : réglages qu'on ne touche qu'une fois (synchro, liaison ENDGO, sauvegarde). */
+function vMenu(){
+  main.innerHTML = `
+  <button class="btn ghost" type="button" id="back" style="align-self:flex-start">‹ Retour</button>
   ${msCard()}
   ${lienCard()}
   <div class="card"><h2>Sauvegarde</h2>
-    <p class="muted small" style="margin:0 0 10px">Tes projets restent sur cet appareil. Garde une copie de temps en temps.</p>
+    <p class="muted small" style="margin:0 0 10px">Une copie de tous tes projets, au cas où.</p>
     <div class="row"><button class="btn" type="button" id="exp">Copier la sauvegarde</button><label class="btn" style="cursor:pointer">Importer un fichier<input type="file" id="imp" accept=".json,application/json" hidden></label><button class="btn" type="button" id="paste">Coller une sauvegarde</button></div>
     <textarea id="bk" rows="4" hidden aria-label="Sauvegarde"></textarea>
   </div>`;
-  const on = (sel, fn) => main.querySelectorAll(sel).forEach(i => i.onchange = () => { fn(i); save(); });
-  on("#s_taux", i => st.taux = num(i.value, SET_DEF.taux));
-  on("[data-pct]", i => { st.phasePct = Object.assign({}, S("phasePct"), {[i.dataset.pct]: num(i.value)}); });
-  on("[data-cxv]", i => { const a = S("cx").slice(); a[+i.dataset.cxv] = num(i.value, 1); st.cx = a; });
-  on("[data-t]", i => { const o = types[i.dataset.t] = types[i.dataset.t] || {}; if(i.dataset.h){ o.h = o.h || {}; o.h[i.dataset.h] = num(i.value); } else o[i.dataset.k] = num(i.value); });
+  main.querySelector("#back").onclick = () => go(DB.prevTab && DB.prevTab !== "menu" ? DB.prevTab : "projets");
   lienBind(); msBind();
   const bk = main.querySelector("#bk");
   main.querySelector("#exp").onclick = function(){ bk.hidden = false; bk.value = JSON.stringify({app:"driv3d-metallerie", ...DB}); copy(bk.value, this); };
   main.querySelector("#paste").onclick = function(){ if(bk.hidden){ bk.hidden = false; bk.value = ""; bk.placeholder = "Colle ici le texte de la sauvegarde, puis touche encore le bouton"; bk.focus(); return; } restore(bk.value, this); };
   main.querySelector("#imp").onchange = e => { const f = e.target.files[0]; if(!f) return; const r = new FileReader(); r.onload = () => restore(r.result, main.querySelector("#exp")); r.readAsText(f); };
 }
+document.getElementById("menuBtn").onclick = () => { if(DB.tab === "menu") return; DB.prevTab = DB.tab; go("menu"); };
 function restore(txt, btn){
   try{ const d = JSON.parse(txt); if(!d || !Array.isArray(d.projets)) throw 0; DB = Object.assign({v:1, projets:[], settings:{}}, d); delete DB.app; save(); btn.textContent = "Sauvegarde chargée"; setTimeout(render, 600); }
   catch(e){ btn.textContent = "Texte non reconnu"; }
