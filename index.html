@@ -212,6 +212,7 @@ function save(){
     const d = new Date();
     document.getElementById("saveState").textContent = ok ? "Enregistré "+String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0") : "Non enregistré";
     if(typeof lienPrixPlanifier === "function") lienPrixPlanifier();
+    if(typeof msPlanifier === "function" && !msBusy) msPlanifier();
   }, 250);
 }
 const S = k => (DB.settings[k]===undefined || DB.settings[k]===null || DB.settings[k]==="") ? SET_DEF[k] : DB.settings[k];
@@ -604,6 +605,95 @@ function lienBind(){
     if(DB.tab === "reglages"){ const s2 = main.querySelector("#l_st"); if(s2) s2.textContent = LIEN.err ? "Échec : " + LIEN.err : "OK, relevé le " + new Date(LIEN.at).toLocaleString("fr-FR"); } };
 }
 
+/* ================= Synchro de MES projets (PC ↔ téléphone) =================
+   Script Google sur le compte de Donatien (fichier script-google-driv3d.gs), distinct du script ENDGO.
+   Fusion projet par projet : ce qui a changé d'un seul côté gagne ; si les deux ont changé, l'appareil qui synchronise garde sa version. */
+const MS_KEY = "driv3d_sync";
+let MS = {url:"", key:"", version:"", base:{p:{}, s:""}, at:"", err:""};
+try{ MS = Object.assign(MS, JSON.parse(localStorage.getItem(MS_KEY) || "{}")); }catch(e){}
+MS.base = MS.base || {p:{}, s:""};
+function msStore(){ try{ localStorage.setItem(MS_KEY, JSON.stringify(MS)); }catch(e){} }
+const msOn = () => !!(MS.url && MS.key);
+function msCall(payload){ payload.key = MS.key; return fetch(MS.url, {method:"POST", body:JSON.stringify(payload)}).then(r => r.json()); }
+const msH = o => JSON.stringify(o === undefined ? null : o);
+function msLocalChanged(){
+  if(msH(DB.settings) !== MS.base.s) return true;
+  const ids = Object.keys(MS.base.p); if(ids.length !== DB.projets.length) return true;
+  return DB.projets.some(p => MS.base.p[p.id] !== msH(p));
+}
+function msReplace(obj, src){ Object.keys(obj).forEach(k => delete obj[k]); Object.assign(obj, JSON.parse(JSON.stringify(src))); }
+/* Fusionne les données distantes R dans DB. Renvoie true si DB a changé. */
+function msMerge(R){
+  const B = MS.base.p, L = {}, Rm = {}; let chg = false;
+  DB.projets.forEach(p => L[p.id] = p); (R.projets || []).forEach(p => Rm[p.id] = p);
+  const out = [];
+  DB.projets.forEach(p => { const r = Rm[p.id], b = B[p.id], lc = msH(p) !== b;
+    if(!r){ if(b !== undefined && !lc){ chg = true; return; } out.push(p); return; }     // effacé ailleurs (et pas modifié ici) ou nouveau ici
+    const rc = msH(r) !== b;
+    if(rc && !lc){ msReplace(p, r); chg = true; }
+    out.push(p); });
+  const neufs = (R.projets || []).filter(r => !L[r.id] && !(B[r.id] !== undefined && msH(r) === B[r.id]));  // pas effacé ici sans changement là-bas
+  if(neufs.length){ chg = true;
+    // même chantier ENDGO reçu sur les deux appareils : on garde la copie déjà synchronisée de l'autre appareil
+    neufs.forEach(r => { if(!r.endgo || !r.endgo.id) return; const i = out.findIndex(p => p.endgo && p.endgo.id === r.endgo.id && B[p.id] === undefined);
+      if(i >= 0){ if(DB.cur === out[i].id) DB.cur = r.id; out.splice(i, 1); } });
+    out.unshift(...neufs.map(r => JSON.parse(JSON.stringify(r)))); }
+  if(chg) DB.projets = out;
+  if(R.settings && msH(R.settings) !== MS.base.s && msH(DB.settings) === MS.base.s){ msReplace(DB.settings, R.settings); chg = true; }
+  return chg;
+}
+function msSetBase(){ MS.base = {p:{}, s:msH(DB.settings)}; DB.projets.forEach(p => MS.base.p[p.id] = msH(p)); }
+let msBusy = false, msTimer = null;
+async function msSync(manuel){
+  if(!msOn() || msBusy) return;
+  if(!navigator.onLine){ if(manuel) lienMsg("Hors ligne"); return; }
+  msBusy = true;
+  try{
+    for(let essai = 0; essai < 3; essai++){
+      const info = await msCall({action:"info"});
+      if(!info || !info.ok) throw new Error((info && info.err) || "script injoignable");
+      const distant = (info.version || "") !== (MS.version || ""), local = msLocalChanged();
+      let chg = false, version = info.version || "";
+      if(distant){
+        const r = await msCall({action:"pull"}); if(!r || !r.ok) throw new Error((r && r.err) || "lecture impossible");
+        version = r.version || "";
+        let R = null; try{ R = r.data ? JSON.parse(r.data) : null; }catch(e){}
+        if(R) chg = msMerge(R);
+      }
+      if(chg){ save(); const a = document.activeElement; if(!a || !/INPUT|TEXTAREA|SELECT/.test(a.tagName)) render(); }
+      const envoyer = local || (distant && !version) || (!version && DB.projets.length);
+      if(envoyer || (distant && msLocalChanged())){
+        const p = await msCall({action:"push", base:version, data:JSON.stringify({v:1, projets:DB.projets, settings:DB.settings})});
+        if(p && p.conflict){ MS.version = ""; continue; }      // quelqu'un a écrit entre-temps : on recommence
+        if(!p || !p.ok) throw new Error((p && p.err) || "envoi impossible");
+        version = p.version;
+      }
+      MS.version = version; msSetBase(); MS.at = new Date().toISOString(); MS.err = ""; msStore();
+      if(manuel || chg) lienMsg(chg ? "Projets mis à jour depuis l'autre appareil" : "Projets synchronisés");
+      break;
+    }
+  }catch(e){ MS.err = e.message; msStore(); if(manuel) lienMsg("Synchro : " + e.message); }
+  finally{ msBusy = false; }
+}
+function msPlanifier(){ if(!msOn()) return; clearTimeout(msTimer); msTimer = setTimeout(() => msSync(false), 4000); }
+function msCard(){
+  return `<div class="card"><h2>Synchro de mes projets</h2>
+    <p class="muted small" style="margin:0 0 10px">Tes projets sur TON Google Drive (dossier « D-Riv 3D Metallerie »), pareils sur le PC et le téléphone. Script à part de celui d'ENDGO : mets ici l'adresse et la clé de ton script D-Riv 3D, les mêmes sur chaque appareil.</p>
+    <div class="grid"><label class="f"><span>Adresse du script (se termine par /exec)</span><input id="m_url" value="${esc(MS.url)}" placeholder="https://script.google.com/macros/s/…/exec"></label>
+    <label class="f"><span>Clé</span><input id="m_key" value="${esc(MS.key)}"></label></div>
+    <div class="row" style="margin-top:10px"><button class="btn" type="button" id="m_go">Synchroniser maintenant</button></div>
+    <p class="muted small" id="m_st" style="margin:8px 0 0">${!msOn() ? "Pas encore réglée : tes projets restent sur cet appareil." : MS.err ? "Dernier essai en échec : " + esc(MS.err) : MS.at ? "Dernière synchro : " + new Date(MS.at).toLocaleString("fr-FR") : "Réglée, pas encore synchronisée."}</p></div>`;
+}
+function msBind(){
+  const u = main.querySelector("#m_url"), k = main.querySelector("#m_key"); if(!u) return;
+  const lire = () => { const nu = u.value.trim(), nk = k.value.trim(); if(nu !== MS.url || nk !== MS.key){ MS.url = nu; MS.key = nk; MS.version = ""; MS.base = {p:{}, s:""}; MS.err = ""; msStore(); } };
+  u.onchange = lire; k.onchange = lire;
+  main.querySelector("#m_go").onclick = async () => { lire(); const st = main.querySelector("#m_st");
+    if(!msOn()){ st.textContent = "Indique l'adresse et la clé."; return; }
+    st.textContent = "Synchro en cours…"; await msSync(true);
+    const s2 = main.querySelector("#m_st"); if(s2) s2.textContent = MS.err ? "Échec : " + MS.err : "OK, synchronisé le " + new Date(MS.at).toLocaleString("fr-FR"); };
+}
+
 /* ================= Réglages ================= */
 function vReglages(){
   const st = DB.settings, types = st.types = st.types || {}, pct = S("phasePct"), cx = S("cx");
@@ -622,6 +712,7 @@ function vReglages(){
     ${t.f.map(([fk,l,u,h])=>`<label class="f"><span>${esc(l)} (h/${u})</span><input data-t="${k}" data-h="${fk}" inputmode="decimal" value="${h}"></label>`).join("")}
     <label class="f"><span>Prix à la tonne (€/t)</span><input data-t="${k}" data-k="eurT" inputmode="decimal" value="${t.eurT}"></label>
   </div></div>`; }).join("")}
+  ${msCard()}
   ${lienCard()}
   <div class="card"><h2>Sauvegarde</h2>
     <p class="muted small" style="margin:0 0 10px">Tes projets restent sur cet appareil. Garde une copie de temps en temps.</p>
@@ -633,7 +724,7 @@ function vReglages(){
   on("[data-pct]", i => { st.phasePct = Object.assign({}, S("phasePct"), {[i.dataset.pct]: num(i.value)}); });
   on("[data-cxv]", i => { const a = S("cx").slice(); a[+i.dataset.cxv] = num(i.value, 1); st.cx = a; });
   on("[data-t]", i => { const o = types[i.dataset.t] = types[i.dataset.t] || {}; if(i.dataset.h){ o.h = o.h || {}; o.h[i.dataset.h] = num(i.value); } else o[i.dataset.k] = num(i.value); });
-  lienBind();
+  lienBind(); msBind();
   const bk = main.querySelector("#bk");
   main.querySelector("#exp").onclick = function(){ bk.hidden = false; bk.value = JSON.stringify({app:"driv3d-metallerie", ...DB}); copy(bk.value, this); };
   main.querySelector("#paste").onclick = function(){ if(bk.hidden){ bk.hidden = false; bk.value = ""; bk.placeholder = "Colle ici le texte de la sauvegarde, puis touche encore le bouton"; bk.focus(); return; } restore(bk.value, this); };
@@ -654,10 +745,11 @@ function applyTheme(){ let t = "dark"; try{ t = localStorage.getItem(THEME_KEY) 
 document.getElementById("themeBtn").onclick = () => { const l = document.documentElement.dataset.theme === "light"; try{ localStorage.setItem(THEME_KEY, l ? "dark" : "light"); }catch(e){} applyTheme(); };
 applyTheme();
 render();
-if(lienOn()) setTimeout(() => lienRelever(false), 1500);
-setInterval(() => { if(!document.hidden) lienRelever(false); }, 120000);
-document.addEventListener("visibilitychange", () => { if(!document.hidden) lienRelever(false); });
-window.addEventListener("online", () => lienRelever(false));
+async function toutSync(){ await msSync(false); await lienRelever(false); }
+setTimeout(toutSync, 1500);
+setInterval(() => { if(!document.hidden) toutSync(); }, 120000);
+document.addEventListener("visibilitychange", () => { if(!document.hidden) toutSync(); else if(msOn() && msLocalChanged()){ clearTimeout(msTimer); msSync(false); } });
+window.addEventListener("online", toutSync);
 if("serviceWorker" in navigator && location.protocol === "https:" && !/claude/.test(location.hostname)) navigator.serviceWorker.register("sw.js").catch(()=>{});
 </script>
 </body>
