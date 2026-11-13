@@ -191,21 +191,21 @@ const PHASES = [
 const DOCS = [["pdf","Plans archi PDF"],["dwg","DWG"],["ndc","Note de calcul"],["photos","Photos / croquis"],["v3d","Schéma 3D Endgo"],["poids","Poids d'acier"]];
 // Heures de MODÉLISATION 3D + plans d'ensemble (calcul revu le 13/11/2026 avec Donatien).
 // Les plans de fabrication + nomenclatures + montage = modélisation × coefPlans.
-// [clé, libellé, unité, heures par unité] ; prem = heures du 1er élément du 1er champ (1er portique dessiné, les suivants copiés).
+// [clé, libellé, unité, heures par unité] ; prem = heures du 1er élément du 1er champ (dessiné en entier, les suivants copiés), calés avec Donatien le 13/11/2026.
 const TYPES = {
-  bat:{label:"Bâtiment à portiques", base:1.5, prem:3, eurT:100, f:[["portiques","Portiques (le 1er est dessiné, les autres copiés)","u",0.1],["pieces","Pièces secondaires (pannes, lisses, contreventement…)","u",0.01],["assemb","Assemblages types différents","u",0.3]],
+  bat:{label:"Bâtiment à portiques", base:1.5, prem:3, premLab:"1er portique", copieLab:"Chaque portique copié", eurT:100, f:[["portiques","Portiques (le 1er est dessiné, les autres copiés)","u",0.1],["pieces","Pièces secondaires (pannes, lisses, contreventement…)","u",0.01],["assemb","Assemblages types différents","u",0.3]],
        aide:"Un portique = 2 poteaux, 2 arbalétriers, 2 jarrets, 1 faîtage, 2 platines de pied."},
-  mezz:{label:"Mezzanine / plancher", base:1.5, eurT:200, f:[["pieces","Pièces (poteaux, poutres, solives)","u",0.075],["tremies","Trémies","u",0.75],["assemb","Assemblages types différents","u",0.5]],
+  mezz:{label:"Mezzanine / plancher", base:0.5, prem:1, premLab:"1re travée (poteau, poutre, solive)", copieLab:"Chaque pièce suivante", eurT:200, f:[["pieces","Pièces (poteaux, poutres, solives)","u",0.015],["tremies","Trémies","u",0.4],["assemb","Assemblages types différents","u",0.25]],
        aide:"Compter poteaux + poutres porteuses + solives. L'escalier se chiffre à part."},
-  esc:{label:"Escalier", base:2, eurT:700, f:[["marches","Marches","u",0.15],["paliers","Paliers","u",1],["gc","Garde-corps d'escalier","ml",0.15]],
+  esc:{label:"Escalier", base:1, prem:1.5, premLab:"1re marche avec les limons", copieLab:"Chaque marche suivante", eurT:700, f:[["marches","Marches","u",0.02],["paliers","Paliers","u",0.75],["gc","Garde-corps d'escalier","ml",0.15]],
        aide:"Escalier droit 1 volée ≈ 15 marches. Quart ou demi-tournant : compter le palier."},
-  gc:{label:"Garde-corps", base:1, eurT:900, f:[["ml","Longueur droite","ml",0.125],["rampant","Longueur en rampant","ml",0.2],["angles","Angles / retours","u",0.25]],
+  gc:{label:"Garde-corps", base:0.5, prem:1.5, premLab:"1er module (≈ 2 ml)", copieLab:"Chaque ml suivant", eurT:900, f:[["ml","Longueur droite","ml",0.03],["rampant","Longueur en rampant","ml",0.06],["angles","Angles / retours","u",0.25]],
       aide:"Compter chaque changement de direction comme un angle."},
   port:{label:"Portail / clôture", base:1.5, eurT:600, f:[["portails","Portails","u",1.5],["portillons","Portillons","u",1],["cloture","Clôture","ml",0.025]],
         aide:"Un portail coulissant compte comme un portail."},
-  auv:{label:"Auvent / carport", base:1.5, eurT:400, f:[["poteaux","Poteaux","u",0.5],["pieces","Autres pièces (poutres, pannes)","u",0.075],["assemb","Assemblages types différents","u",0.5]],
+  auv:{label:"Auvent / carport", base:0.5, prem:1.5, premLab:"1er poteau avec sa poutre", copieLab:"Chaque poteau suivant", eurT:400, f:[["poteaux","Poteaux","u",0.1],["pieces","Autres pièces (poutres, pannes)","u",0.02],["assemb","Assemblages types différents","u",0.3]],
        aide:"Auvent simple à 2 poteaux ≈ 10 pièces."},
-  pass:{label:"Passerelle", base:3, eurT:300, f:[["longueur","Longueur","m",0.6],["assemb","Assemblages types différents","u",0.5]],
+  pass:{label:"Passerelle", base:0.5, prem:1.5, premLab:"1er mètre (1re travée)", copieLab:"Chaque mètre suivant", eurT:300, f:[["longueur","Longueur","m",0.05],["assemb","Assemblages types différents","u",0.3]],
         aide:"Le garde-corps de la passerelle se chiffre en plus (ouvrage Garde-corps)."},
   serr:{label:"Serrurerie / autre", base:1, eurT:800, f:[["pieces","Pièces","u",0.1],["assemb","Assemblages types différents","u",0.5]],
         aide:"Pour tout ce qui n'entre pas ailleurs."}
@@ -235,7 +235,7 @@ function save(){
 const S = k => (DB.settings[k]===undefined || DB.settings[k]===null || DB.settings[k]==="") ? SET_DEF[k] : DB.settings[k];
 function T(type){ // type d'ouvrage avec les réglages de l'utilisateur
   const b = TYPES[type], o = (S("typesM")||{})[type] || {};
-  return { label:b.label, aide:b.aide, base: num(o.base, b.base), eurT: num(o.eurT, b.eurT), prem: b.prem === undefined ? null : num(o.prem, b.prem),
+  return { label:b.label, aide:b.aide, base: num(o.base, b.base), eurT: num(o.eurT, b.eurT), prem: b.prem === undefined ? null : num(o.prem, b.prem), premLab:b.premLab, copieLab:b.copieLab,
            f: b.f.map(([k,l,u,h]) => [k,l,u, num(o.h && o.h[k], h)]) };
 }
 function num(v, def){ if(v===undefined || v===null || v==="") return def===undefined?0:def; const n = parseFloat(String(v).replace(",", ".")); return isNaN(n) ? (def===undefined?0:def) : n; }
@@ -728,8 +728,8 @@ function vReglages(){
     ${Object.keys(TYPES).map(k => { const t = T(k), mod = types[k] && Object.keys(types[k]).length; return `<details class="sdet" data-det="${k}">
       <summary>${t.label}${mod ? ` <small>· modifié</small>` : ""}</summary><div class="in">
       ${row("Mise en route du projet", "Temps fixe, quelle que soit la taille.", `data-t="${k}" data-k="base"`, t.base, "h")}
-      ${t.prem !== null ? row("1er portique", "Dessiné en entier.", `data-t="${k}" data-k="prem"`, t.prem, "h") : ""}
-      ${t.f.map(([fk,l,u,h],i) => row(i===0 && t.prem!==null ? "Chaque portique copié" : "Par " + (u === "u" ? "unité" : u) + " : " + esc(l.toLowerCase()), "", `data-t="${k}" data-h="${fk}"`, h, "h/" + u)).join("")}
+      ${t.prem !== null ? row(t.premLab, "Dessiné en entier.", `data-t="${k}" data-k="prem"`, t.prem, "h") : ""}
+      ${t.f.map(([fk,l,u,h],i) => row(i===0 && t.prem!==null ? t.copieLab : "Par " + (u === "u" ? "unité" : u) + " : " + esc(l.toLowerCase()), "", `data-t="${k}" data-h="${fk}"`, h, "h/" + u)).join("")}
       ${row("Prix à la tonne", "Utilisé quand tu choisis « Prix à la tonne ».", `data-t="${k}" data-k="eurT"`, t.eurT, "€/t")}
       ${k === "bat" ? `<p class="hint" id="exBat" style="margin:8px 0 0">${exBat()}</p>` : ""}
       ${mod ? `<button class="btn sm ghost" type="button" data-reset="${k}" style="margin-top:8px">Remettre les valeurs d'origine</button>` : ""}
